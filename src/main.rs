@@ -4,9 +4,11 @@ use rodio::{OutputStream, source::SineWave, Sink};
 
 struct PomodoroApp {
     start_time: Option<Instant>,
-    paused_duration: Duration, // Track the total duration for which the timer was paused
-    duration: Duration,
+    work_duration: Duration,   // Duration for concentration (work) period
+    pause_duration: Duration,  // Duration for break (pause) period
+    current_duration: Duration, // The duration for the current interval (work or break)
     timer_running: bool,
+    is_work_period: bool,      // Flag to track if it's a work period or break period
     timer_ended: bool,
     sink: Option<Sink>,
     _stream: Option<OutputStream>, // Keep the stream alive
@@ -19,9 +21,11 @@ impl PomodoroApp {
 
         Self {
             start_time: None,
-            paused_duration: Duration::new(0, 0),
-            duration: Duration::new(1500, 0), // 25 minutes for Pomodoro
+            work_duration: Duration::new(25 * 60, 0),   // 25 minutes for work
+            pause_duration: Duration::new(5 * 60, 0),   // 5 minutes for break
+            current_duration: Duration::new(25 * 60, 0), // Initially set to work duration
             timer_running: false,
+            is_work_period: true,   // Start with work period
             timer_ended: false,
             sink: Some(sink),
             _stream: Some(_stream), // Keep the stream alive
@@ -30,9 +34,9 @@ impl PomodoroApp {
 
     fn play_end_sound(&mut self) {
         if let Some(sink) = &self.sink {
-            if sink.empty() {  // Check if sink is empty
-                sink.append(SineWave::new(440.0)); // Append sound
-                sink.play(); // Ensure the sink is playing
+            if sink.empty() {
+                sink.append(SineWave::new(440.0)); // Append a sound at 440 Hz
+                sink.play();
                 println!("Playing sound..."); // Debug print
             }
         } else {
@@ -104,68 +108,81 @@ impl eframe::App for PomodoroApp {
                 let (minutes, seconds) = if self.timer_running {
                     if let Some(start_time) = self.start_time {
                         let elapsed = start_time.elapsed();
-                        let total_elapsed = elapsed + self.paused_duration;
-                        let remaining = if self.duration > total_elapsed {
-                            self.duration - total_elapsed
+                        let remaining = if self.current_duration > elapsed {
+                            self.current_duration - elapsed
                         } else {
                             Duration::new(0, 0)
                         };
+
+                        if remaining.as_secs() == 0 {
+                            // Timer has ended
+                            self.timer_running = false;
+                            self.timer_ended = true;
+
+                            // Switch between work and break intervals
+                            if self.is_work_period {
+                                self.current_duration = self.pause_duration; // Switch to break
+                                self.is_work_period = false;
+                            } else {
+                                self.current_duration = self.work_duration; // Switch to work
+                                self.is_work_period = true;
+                            }
+
+                            // Restart the timer after switching periods
+                            self.start_time = Some(Instant::now());
+                        }
+
                         (remaining.as_secs() / 60, remaining.as_secs() % 60)
                     } else {
                         (0, 0)
                     }
                 } else {
-                    let total_elapsed = self.paused_duration;
-                    let remaining = if self.duration > total_elapsed {
-                        self.duration - total_elapsed
-                    } else {
-                        Duration::new(0, 0)
-                    };
+                    // If timer is paused or not running, show the remaining time
+                    let remaining = self.current_duration;
                     (remaining.as_secs() / 60, remaining.as_secs() % 60)
                 };
 
                 ui.heading(format!("{:02}:{:02}", minutes, seconds));
                 ui.add_space(20.0);
 
-                // Center the buttons using vertical_centered and horizontal layouts
-                ui.vertical_centered(|ui| {
-                    if ui.button(if self.timer_running { "Pause" } else { "Start" }).clicked() {
-                        if self.timer_running {
-                            self.timer_running = false;
-                            self.paused_duration += self.start_time.unwrap_or_else(Instant::now).elapsed();
-                            self.start_time = None;
-                        } else {
-                            self.timer_running = true;
-                            self.start_time = Some(Instant::now());
-                            self.timer_ended = false;
-                        }
-                    }
-
-                    ui.add_space(10.0);
-
-                    if ui.button("Reset").clicked() {
+                // Start/Pause button
+                if ui.button(if self.timer_running { "Pause" } else { "Start" }).clicked() {
+                    if self.timer_running {
+                        // Pausing the timer
                         self.timer_running = false;
-                        self.start_time = None;
-                        self.paused_duration = Duration::new(0, 0);
+                    } else {
+                        // Starting the timer
+                        self.timer_running = true;
+                        self.start_time = Some(Instant::now());
                         self.timer_ended = false;
                     }
-                });
+                }
+
+                ui.add_space(10.0);
+
+                // Reset button
+                if ui.button("Reset").clicked() {
+                    self.timer_running = false;
+                    self.start_time = None;
+                    self.current_duration = self.work_duration;
+                    self.timer_ended = false;
+                }
 
                 ui.add_space(20.0);
 
                 // Display a progress bar
                 let total_elapsed = if self.timer_running {
-                    self.start_time.unwrap_or_else(Instant::now).elapsed() + self.paused_duration
-                } else {
-                    self.paused_duration
-                };
-                let remaining = if self.duration > total_elapsed {
-                    self.duration - total_elapsed
+                    self.start_time.unwrap_or_else(Instant::now).elapsed()
                 } else {
                     Duration::new(0, 0)
                 };
-                let progress = if self.duration.as_secs() > 0 {
-                    1.0 - remaining.as_secs_f32() / self.duration.as_secs_f32()
+                let remaining = if self.current_duration > total_elapsed {
+                    self.current_duration - total_elapsed
+                } else {
+                    Duration::new(0, 0)
+                };
+                let progress = if self.current_duration.as_secs() > 0 {
+                    1.0 - remaining.as_secs_f32() / self.current_duration.as_secs_f32()
                 } else {
                     0.0
                 };
@@ -196,3 +213,4 @@ fn main() -> Result<(), eframe::Error> {
         Box::new(|_cc| Ok(Box::new(PomodoroApp::new()))),
     )
 }
+
