@@ -1,0 +1,10 @@
+[package]
+name = "pomodoro_timer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.28.1"
+egui = "0.28.1"
+rodio = "0.19.0"
+time = "0.3.36"
